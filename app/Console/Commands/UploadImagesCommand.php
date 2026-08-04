@@ -2,8 +2,9 @@
 
 namespace App\Console\Commands;
 
+use App\Services\JsFileService;
+use App\Services\ShopifyService;
 use Illuminate\Console\Command;
-use Illuminate\Support\Facades\File;
 
 class UploadImagesCommand extends Command
 {
@@ -20,38 +21,60 @@ class UploadImagesCommand extends Command
     /**
      * Execute the console command.
      */
-    public function handle(): int
-    {
-        $folder = storage_path('app/images');
+public function handle(): int
+{
+    $js = app(JsFileService::class);
 
-        // Check if folder exists
-        if (!File::exists($folder)) {
-            $this->error("Folder not found:");
-            $this->line($folder);
+    $shopify = app(\App\Services\ShopifyService::class);
 
-            return self::FAILURE;
+    $content = $js->read();
+
+    $urls = $js->extractImageUrls($content);
+
+    $total = count($urls);
+    $shopifyAlready = 0;
+    $external = 0;
+
+    foreach ($urls as $url) {
+
+        if ($shopify->isShopifyUrl($url)) {
+            $shopifyAlready++;
+        } else {
+            $external++;
         }
 
-        // Get all files
-        $files = File::files($folder);
-
-        if (empty($files)) {
-            $this->warn("No images found.");
-
-            return self::SUCCESS;
-        }
-
-        $this->info("Images Found:");
-        $this->newLine();
-
-        foreach ($files as $file) {
-
-            $this->line(
-                $file->getFilename()
-            );
-
-        }
-
-        return self::SUCCESS;
     }
+
+    $this->info("Total Images      : {$total}");
+    $this->info("Already Shopify   : {$shopifyAlready}");
+    $this->info("Need Upload       : {$external}");
+
+    foreach ($urls as $url) {
+
+    // Skip Shopify URLs
+    if ($shopify->isShopifyUrl($url)) {
+        continue;
+    }
+
+    $this->info("Processing:");
+    $this->line($url);
+
+    // Download image
+   $localPath = $shopify->downloadImage($url);
+
+$this->info("Downloaded:");
+$this->line($localPath);
+
+$this->info("Uploading to Shopify...");
+
+$cdnUrl = $shopify->uploadLocalImage($localPath);
+
+$this->info("Shopify CDN URL:");
+
+$this->line($cdnUrl);
+
+    }
+
+    return self::SUCCESS;
+}
 }

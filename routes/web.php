@@ -3,6 +3,10 @@
 use Illuminate\Support\Facades\Route;
 use App\Services\ShopifyService;
 
+Route::get('/', function () {
+    return view('welcome');
+});
+
 Route::get('/shopify/upload-test', function (ShopifyService $shopify) {
 
     $filePath = storage_path('app/test/sample.webp');
