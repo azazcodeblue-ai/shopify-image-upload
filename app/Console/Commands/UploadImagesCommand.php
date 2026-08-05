@@ -4,8 +4,8 @@ namespace App\Console\Commands;
 
 use App\Services\JsFileService;
 use App\Services\ShopifyService;
-use Illuminate\Console\Command;
 use App\Services\UrlMappingService;
+use Illuminate\Console\Command;
 
 class UploadImagesCommand extends Command
 {
@@ -22,107 +22,231 @@ class UploadImagesCommand extends Command
     /**
      * Execute the console command.
      */
-public function handle(): int
-{
-    $js = app(JsFileService::class);
-    $shopify = app(ShopifyService::class);
-    $mapping = app(UrlMappingService::class);
+    public function handle(): int
+    {
+        $startTime = microtime(true);
 
-    $content = $js->read();
-    $urls = $js->extractImageUrls($content);
+        $js = app(JsFileService::class);
+        $shopify = app(ShopifyService::class);
+        $mapping = app(UrlMappingService::class);
 
-    $total = count($urls);
+        $content = $js->read();
+        $urls = $js->extractImageUrls($content);
 
-    $shopifyAlready = 0;
-    $external = 0;
+        $total = count($urls);
 
-    // Count images
-    foreach ($urls as $url) {
-        if ($shopify->isShopifyUrl($url)) {
-            $shopifyAlready++;
-        } else {
-            $external++;
-        }
-    }
+        $shopifyAlready = 0;
+        $uploaded = 0;
+        $failed = 0;
+        $skipped = 0;
 
-    $this->info("=================================");
-    $this->info("Total Images      : {$total}");
-    $this->info("Already Shopify   : {$shopifyAlready}");
-    $this->info("Need Upload       : {$external}");
-    $this->info("=================================");
-    $this->newLine();
+        $failedImages = [];
 
-    // Upload only external images
-    foreach ($urls as $url) {
+        /*
+        |--------------------------------------------------------------------------
+        | Count Images
+        |--------------------------------------------------------------------------
+        */
 
-        if ($shopify->isShopifyUrl($url)) {
-            continue;
-        }
+        foreach ($urls as $url) {
 
-        try {
-
-            $this->info("Processing:");
-            $this->line($url);
-
-            // Download
-            $localPath = $shopify->downloadImage($url);
-
-            $this->info("Downloaded:");
-            $this->line($localPath);
-
-            // Upload
-            $this->info("Uploading to Shopify...");
-
-            $cdnUrl = $shopify->uploadLocalImage($localPath);
-
-            // Save mapping
-            $mapping->add($url, $cdnUrl);
-
-            $this->info("Shopify URL:");
-            $this->line($cdnUrl);
-
-            // Delete temp file
-            if (file_exists($localPath)) {
-                unlink($localPath);
+            if ($shopify->isShopifyUrl($url)) {
+                $shopifyAlready++;
+                $skipped++;
             }
 
-            $this->info("✔ Upload Complete");
-            $this->newLine();
-
-        } catch (\Throwable $e) {
-
-            $this->error("Upload Failed");
-            $this->error($url);
-            $this->error($e->getMessage());
-            $this->newLine();
         }
+
+        $needUpload = $total - $skipped;
+
+        $this->info("==================================================");
+        $this->info("Shopify Image Upload");
+        $this->info("==================================================");
+
+        $this->line("Total Images      : {$total}");
+        $this->line("Already Shopify   : {$shopifyAlready}");
+        $this->line("Need Upload       : {$needUpload}");
+
+        $this->newLine();
+
+        /*
+        |--------------------------------------------------------------------------
+        | Upload Images
+        |--------------------------------------------------------------------------
+        */
+
+        $current = 1;
+
+        foreach ($urls as $url) {
+
+            if ($shopify->isShopifyUrl($url)) {
+                continue;
+            }
+
+            $this->info("==================================================");
+            $this->info("[{$current}/{$needUpload}]");
+            $this->info("==================================================");
+
+            try {
+
+                $this->info("Processing:");
+                $this->line($url);
+
+                /*
+                |--------------------------------------------------------------------------
+                | Download
+                |--------------------------------------------------------------------------
+                */
+
+                $localPath = $shopify->downloadImage($url);
+
+                $this->info("Downloaded:");
+                $this->line($localPath);
+
+                /*
+                |--------------------------------------------------------------------------
+                | Upload
+                |--------------------------------------------------------------------------
+                */
+
+                $this->info("Uploading to Shopify...");
+
+                $cdnUrl = $shopify->uploadLocalImage($localPath);
+
+                $uploaded++;
+
+                /*
+                |--------------------------------------------------------------------------
+                | Save Mapping
+                |--------------------------------------------------------------------------
+                */
+
+                $mapping->add($url, $cdnUrl);
+
+                $this->info("Shopify URL:");
+                $this->line($cdnUrl);
+
+                /*
+                |--------------------------------------------------------------------------
+                | Delete Temp File
+                |--------------------------------------------------------------------------
+                */
+
+                if (file_exists($localPath)) {
+                    unlink($localPath);
+                }
+
+                $this->info("✔ Upload Complete");
+
+            } catch (\Throwable $e) {
+
+                $failed++;
+
+                $failedImages[] = [
+                    'url' => $url,
+                    'reason' => $e->getMessage(),
+                ];
+
+                $this->error("Upload Failed");
+                $this->error($url);
+                $this->error($e->getMessage());
+            }
+
+            $this->newLine();
+
+            $current++;
+        }
+
+        /*
+        |--------------------------------------------------------------------------
+        | Save Files
+        |--------------------------------------------------------------------------
+        */
+
+        $mapping->save();
+
+        $updatedContent = $js->replaceUrls(
+            $content,
+            $mapping->all()
+        );
+
+        $js->save($updatedContent);
+
+        /*
+        |--------------------------------------------------------------------------
+        | Execution Time
+        |--------------------------------------------------------------------------
+        */
+
+        $executionTime = round(microtime(true) - $startTime, 2);
+
+        /*
+        |--------------------------------------------------------------------------
+        | Final Summary
+        |--------------------------------------------------------------------------
+        */
+
+        $this->newLine();
+
+        $this->info("==================================================");
+        $this->info("Shopify Image Upload Summary");
+        $this->info("==================================================");
+
+        $this->line("Total Images          : {$total}");
+        $this->line("Already Shopify       : {$shopifyAlready}");
+        $this->line("Uploaded Successfully : {$uploaded}");
+        $this->line("Failed                : {$failed}");
+        $this->line("Skipped               : {$skipped}");
+
+        $this->newLine();
+
+        $this->line("Execution Time        : {$executionTime} sec");
+
+        $this->newLine();
+
+        $this->info("Output Files");
+
+        $this->line("✔ " . storage_path('app/output/url-map.json'));
+        $this->line("✔ " . storage_path('app/output/updated-nt-sign-data.js'));
+
+        $this->newLine();
+
+        $this->info("==================================================");
+
+        if ($failed === 0) {
+            $this->info("✔ Process Completed Successfully");
+        } else {
+            $this->warn("⚠ Process Completed With Errors");
+        }
+
+        $this->info("==================================================");
+
+        /*
+        |--------------------------------------------------------------------------
+        | Failed Images
+        |--------------------------------------------------------------------------
+        */
+
+        if (!empty($failedImages)) {
+
+            $this->newLine();
+
+            $this->error("Failed Images");
+
+            foreach ($failedImages as $index => $image) {
+
+                $this->line(($index + 1) . ".");
+
+                $this->line($image['url']);
+
+                $this->line("Reason:");
+
+                $this->error($image['reason']);
+
+                $this->line("--------------------------------------------");
+            }
+        }
+
+        return self::SUCCESS;
     }
-
-    // Save mapping JSON
-    $mapping->save();
-
-    // Replace URLs inside JS
-    $updatedContent = $js->replaceUrls(
-        $content,
-        $mapping->all()
-    );
-
-    // Save updated JS file
-    $js->save($updatedContent);
-
-    $this->info("=================================");
-    $this->info("URL mapping saved:");
-    $this->line(storage_path('app/output/url-map.json'));
-    $this->newLine();
-
-    $this->info("Updated JavaScript saved.");
-    $this->line(storage_path('app/output/updated-nt-sign-data.js'));
-
-    $this->info("=================================");
-    $this->info("Process Completed Successfully.");
-    $this->info("=================================");
-
-    return self::SUCCESS;
-}
-
 }
