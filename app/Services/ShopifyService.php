@@ -223,19 +223,29 @@ GRAPHQL;
     $target = $staged['data']['stagedUploadsCreate']['stagedTargets'][0];
 
     // 2. Upload binary
-    $this->uploadBinary($target, $filePath);
-
+if (! $this->uploadBinary($target, $filePath)) {
+    throw new \Exception('Binary upload failed.');
+}
     // 3. Register file in Shopify
     $file = $this->createFile($target['resourceUrl']);
 
     $id = $file['data']['fileCreate']['files'][0]['id'];
 
     // 4. Wait until Shopify processes it
+   for ($i = 0; $i < 10; $i++) {
+
     sleep(2);
 
-    // 5. Get final CDN URL
     $result = $this->getFile($id);
 
-    return $result['data']['node']['image']['url'];
+    if (
+        isset($result['data']['node']['fileStatus']) &&
+        $result['data']['node']['fileStatus'] === 'READY'
+    ) {
+        return $result['data']['node']['image']['url'];
+    }
+}
+
+throw new \Exception('Shopify did not finish processing the image.');
 }
 };
